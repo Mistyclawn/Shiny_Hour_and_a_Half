@@ -36,6 +36,18 @@
     // 리듬 입력을 위한 버퍼
     const inputBuffer = [];
     const MAX_BUFFER_SIZE = 10;
+    
+    // 리듬/판정 설정 상수
+    const BPM = 120; // 분당 비트 수
+    const BEAT_INTERVAL = 60000 / BPM; // 500ms
+    let nextBeatTime = 0; // 다음 비트 목표 시간
+    
+    let combo = 0;
+    let lastJudge = "READY";
+    let lastJudgeTime = 0;
+    
+    const TOLERANCE_PERFECT = 80;  // +/- 80ms 이내
+    const TOLERANCE_GOOD = 150;    // +/- 150ms 이내
 
     // 트랙 설정
     const TRACK_WIDTH = 4;
@@ -136,6 +148,42 @@
         camera.x += velocity.x * timeScale;
         camera.z += velocity.z * timeScale;
         
+        const now = performance.now();
+        
+        // 입력 버퍼 판정 처리
+        while (inputBuffer.length > 0) {
+            const input = inputBuffer.shift();
+            
+            // 입력 시간 기준으로 앞뒤 비트 중 가까운 것 확인
+            const prevBeatTime = nextBeatTime - BEAT_INTERVAL;
+            const diffNext = Math.abs(input.timestamp - nextBeatTime);
+            const diffPrev = Math.abs(input.timestamp - prevBeatTime);
+            
+            const closestDiff = Math.min(diffNext, diffPrev);
+            
+            if (closestDiff <= TOLERANCE_PERFECT) {
+                lastJudge = "PERFECT";
+                combo++;
+                velocity.z += 0.5; // 완벽 판정 시 가속 부스트
+            } else if (closestDiff <= TOLERANCE_GOOD) {
+                lastJudge = "GOOD";
+                combo++;
+                velocity.z += 0.2; // 좋은 판정 시 약한 가속
+            } else {
+                lastJudge = "MISS";
+                combo = 0;         // 콤보 초기화
+                velocity.z *= 0.8; // 패널티 (감속)
+            }
+            
+            lastJudgeTime = now;
+        }
+
+        // 비트 갱신 처리
+        if (now >= nextBeatTime) {
+            nextBeatTime += BEAT_INTERVAL;
+            // 박자를 놓쳐도 자동 MISS 처리 등은 일단 생략 (클릭 시에만 판정)
+        }
+        
         // --- 가짜 3D 틸트(Roll) 연출 처리 ---
         // A,D 이동 및 마우스 좌우 회전 속도에 따라 카메라를 기울입니다.
         const yawDelta = camera.yaw - prevYaw;
@@ -218,7 +266,8 @@
         document.addEventListener('mousemove', (e) => {
             if (!isPointerLocked) return;
 
-            camera.yaw -= e.movementX * MOUSE_SENSITIVITY;
+            // X축 이동에 따른 Yaw를 += 로 수정하여 마우스 좌우 시야 반전 해결
+            camera.yaw += e.movementX * MOUSE_SENSITIVITY;
             camera.pitch -= e.movementY * MOUSE_SENSITIVITY;
 
             // Pitch 제한 (너무 위나 아래로 회전하지 않도록 제한, 약 -89도 ~ 89도)
@@ -283,6 +332,46 @@
         }
 
         ctx.stroke();
+        
+        // ================= 임시 UI (HUD) 렌더링 =================
+        ctx.fillStyle = '#fff';
+        ctx.font = '24px "Courier New", monospace';
+        ctx.textAlign = 'left';
+        
+        // 콤보 텍스트
+        ctx.fillText(`Combo: ${combo}`, 20, 40);
+        
+        // 판정 결과 텍스트 (시간에 따라 페이드 아웃)
+        const timeSinceJudge = performance.now() - lastJudgeTime;
+        if (timeSinceJudge < 1000 && lastJudge !== "READY") {
+            const alpha = Math.max(0, 1 - timeSinceJudge / 1000);
+            
+            if (lastJudge === "PERFECT") ctx.fillStyle = `rgba(0, 255, 255, ${alpha})`;
+            else if (lastJudge === "GOOD") ctx.fillStyle = `rgba(0, 255, 0, ${alpha})`;
+            else ctx.fillStyle = `rgba(255, 0, 0, ${alpha})`;
+            
+            ctx.font = 'bold 36px "Courier New", monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(lastJudge, canvas.width / 2, canvas.height / 2 - 50);
+        }
+        
+        // 하단 비트 진행도 바 (리듬 게이지)
+        const beatProgress = Math.max(0, Math.min(1, 1 - (nextBeatTime - performance.now()) / BEAT_INTERVAL));
+        const barWidth = 300;
+        const barHeight = 10;
+        const barX = (canvas.width - barWidth) / 2;
+        const barY = canvas.height - 40;
+        
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.2)'; // 배경 게이지
+        ctx.fillRect(barX, barY, barWidth, barHeight);
+        
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.8)'; // 차오르는 게이지
+        ctx.fillRect(barX, barY, barWidth * beatProgress, barHeight);
+        
+        // 정확도 판정선 (중앙 부분)
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.8)';
+        ctx.fillRect(barX + barWidth - 2, barY - 5, 4, barHeight + 10);
+        ctx.fillRect(barX - 2, barY - 5, 4, barHeight + 10);
     }
 
     function gameLoop(timestamp) {
@@ -309,6 +398,9 @@
         
         // 키보드 입력 핸들러 초기화
         initInputHandlers();
+        
+        // 시스템 첫 박자 시작 시간 설정
+        nextBeatTime = performance.now() + BEAT_INTERVAL;
 
         // 메인 게임 루프 시작
         requestAnimationFrame((timestamp) => {
