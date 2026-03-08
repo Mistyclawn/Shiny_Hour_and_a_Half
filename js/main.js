@@ -45,6 +45,7 @@
     let combo = 0;
     let lastJudge = "READY";
     let lastJudgeTime = 0;
+    let currentBeatHit = false;
     
     const TOLERANCE_PERFECT = 80;  // +/- 80ms 이내
     const TOLERANCE_GOOD = 150;    // +/- 150ms 이내
@@ -169,14 +170,17 @@
                 lastJudge = "PERFECT";
                 combo++;
                 velocity.z += 0.5; // 완벽 판정 시 가속 부스트
+                currentBeatHit = true;
             } else if (closestDiff <= TOLERANCE_GOOD) {
                 lastJudge = "GOOD";
                 combo++;
                 velocity.z += 0.2; // 좋은 판정 시 약한 가속
+                currentBeatHit = true;
             } else if (closestDiff <= TOLERANCE_OK) {
                 lastJudge = "OK";
                 combo++;
                 velocity.z += 0.05; // OK 판정 시 미세 가속
+                currentBeatHit = true;
             } else {
                 lastJudge = "MISS";
                 combo = 0;         // 콤보 초기화
@@ -187,10 +191,17 @@
             lastInputType = input.type;
         }
 
-        // 비트 갱신 처리
-        if (now >= nextBeatTime) {
+        // 비트 갱신 및 놓침(MISS) 판정 처리
+        // 현재 시간이 목표 비트 + 유예 시간(OK 범위)을 초과한 경우
+        if (now > nextBeatTime + TOLERANCE_OK) {
+            if (!currentBeatHit) {
+                lastJudge = "MISS (MISSED BEAT)";
+                combo = 0;         // 타이밍을 놓치면 콤보 리셋
+                velocity.z *= 0.8; // 패널티 (감속)
+                lastJudgeTime = now;
+            }
             nextBeatTime += BEAT_INTERVAL;
-            // 박자를 놓쳐도 자동 MISS 처리 등은 일단 생략 (클릭 시에만 판정)
+            currentBeatHit = false; // 다음 비트를 위해 초기화
         }
         
         // --- 가짜 3D 틸트(Roll) 연출 처리 ---
@@ -349,6 +360,12 @@
         
         // 콤보 텍스트
         ctx.fillText(`Combo: ${combo}`, 20, 40);
+        
+        // 현재 속도(가속 수준) 텍스트
+        const currentSpeed = Math.max(0, velocity.z);
+        // 속도가 오를수록 피드백 색상 변화 (일정 수준 이상일 때 파란색/초록색)
+        ctx.fillStyle = currentSpeed > 10 ? '#0ff' : (currentSpeed > 5 ? '#0f0' : '#fff');
+        ctx.fillText(`Speed: ${currentSpeed.toFixed(2)}`, 20, 70);
         
         // 판정 결과 텍스트 (시간에 따라 페이드 아웃)
         const timeSinceJudge = performance.now() - lastJudgeTime;
