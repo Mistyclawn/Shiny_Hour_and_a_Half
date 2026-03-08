@@ -37,19 +37,18 @@
     const inputBuffer = [];
     const MAX_BUFFER_SIZE = 10;
     
-    // 리듬/판정 설정 상수
-    const BPM = 120; // 분당 비트 수
-    const BEAT_INTERVAL = 60000 / BPM; // 500ms
-    let nextBeatTime = 0; // 다음 비트 목표 시간
-    
+    // 동적 리듬/판정 설정 (Phase 기반: 0.0 ~ 1.0)
+    let beatPhase = 0.0; 
     let combo = 0;
     let lastJudge = "READY";
     let lastJudgeTime = 0;
     let currentBeatHit = false;
+    let currentBeatPunished = false;
     
-    const TOLERANCE_PERFECT = 80;  // +/- 80ms 이내
-    const TOLERANCE_GOOD = 150;    // +/- 150ms 이내
-    const TOLERANCE_OK = 250;      // +/- 250ms 이내
+    // 판정 범위 (Phase 기반 관용도)
+    const TOLERANCE_PHASE_PERFECT = 0.10;
+    const TOLERANCE_PHASE_GOOD = 0.25;
+    const TOLERANCE_PHASE_OK = 0.40;
     
     // UI 표시용 (발걸음 피드백)
     let lastInputType = null;
@@ -153,30 +152,43 @@
         camera.x += velocity.x * timeScale;
         camera.z += velocity.z * timeScale;
         
+        // 속도 기반 동적 리듬 페이즈 증가량 계산
+        const currentSpeed = Math.max(0, velocity.z);
+        // 기본 0.5 BPS(초당 0.5비트) ~ 가속 시 최대 속도에 비례해 빨라짐
+        const currentBPS = 0.5 + (currentSpeed * 0.15); 
+        const phaseIncrease = currentBPS * (deltaTime / 1000.0);
+        
+        beatPhase += phaseIncrease;
+
+        // 비트 갱신 처리 (1.0 도달 시 한 바퀴 순환)
+        if (beatPhase >= 1.0) {
+            beatPhase -= 1.0;
+            currentBeatHit = false;     // 새 비트에 대한 판정 초기화
+            currentBeatPunished = false; // 새 비트 놓침 페널티 초기화
+        }
+
         const now = performance.now();
         
         // 입력 버퍼 판정 처리
         while (inputBuffer.length > 0) {
             const input = inputBuffer.shift();
             
-            // 입력 시간 기준으로 앞뒤 비트 중 가까운 것 확인
-            const prevBeatTime = nextBeatTime - BEAT_INTERVAL;
-            const diffNext = Math.abs(input.timestamp - nextBeatTime);
-            const diffPrev = Math.abs(input.timestamp - prevBeatTime);
-            
+            // Phase 기준 판정 (0.0 과 1.0 이 목표 지점)
+            const diffNext = 1.0 - beatPhase; // '조금 일찍' 눌렀을 때의 오차
+            const diffPrev = beatPhase;       // '조금 늦게' 눌렀을 때의 오차
             const closestDiff = Math.min(diffNext, diffPrev);
             
-            if (closestDiff <= TOLERANCE_PERFECT) {
+            if (closestDiff <= TOLERANCE_PHASE_PERFECT) {
                 lastJudge = "PERFECT";
                 combo++;
                 velocity.z += 0.5; // 완벽 판정 시 가속 부스트
                 currentBeatHit = true;
-            } else if (closestDiff <= TOLERANCE_GOOD) {
+            } else if (closestDiff <= TOLERANCE_PHASE_GOOD) {
                 lastJudge = "GOOD";
                 combo++;
                 velocity.z += 0.2; // 좋은 판정 시 약한 가속
                 currentBeatHit = true;
-            } else if (closestDiff <= TOLERANCE_OK) {
+            } else if (closestDiff <= TOLERANCE_PHASE_OK) {
                 lastJudge = "OK";
                 combo++;
                 velocity.z += 0.05; // OK 판정 시 미세 가속
@@ -184,24 +196,21 @@
             } else {
                 lastJudge = "MISS";
                 combo = 0;         // 콤보 초기화
-                velocity.z *= 0.8; // 패널티 (감속)
+                velocity.z *= 0.6; // 패널티 (강한 감속 반영)
             }
             
             lastJudgeTime = now;
             lastInputType = input.type;
         }
 
-        // 비트 갱신 및 놓침(MISS) 판정 처리
-        // 현재 시간이 목표 비트 + 유예 시간(OK 범위)을 초과한 경우
-        if (now > nextBeatTime + TOLERANCE_OK) {
-            if (!currentBeatHit) {
-                lastJudge = "MISS (MISSED BEAT)";
-                combo = 0;         // 타이밍을 놓치면 콤보 리셋
-                velocity.z *= 0.8; // 패널티 (감속)
-                lastJudgeTime = now;
-            }
-            nextBeatTime += BEAT_INTERVAL;
-            currentBeatHit = false; // 다음 비트를 위해 초기화
+        // 마우스를 입력하지 않고 목표 비트(+OK 오차범위)를 넘겼을 때의 자동 MISS 처리
+        // 게이지가 0.40(OK 범위 종료점)을 넘어섰는데 입력이 없었던 경우
+        if (beatPhase > TOLERANCE_PHASE_OK && beatPhase < 0.8 && !currentBeatHit && !currentBeatPunished) {
+            lastJudge = "MISS (MISSED BEAT)";
+            combo = 0;         // 타이밍 놓치면 콤보 리셋
+            velocity.z *= 0.6; // 패널티 (강한 감속 반영)
+            lastJudgeTime = now;
+            currentBeatPunished = true;
         }
         
         // --- 가짜 3D 틸트(Roll) 연출 처리 ---
@@ -387,22 +396,20 @@
         }
         
         // 하단 비트 진행도 바 (리듬 게이지)
-        const beatProgress = Math.max(0, Math.min(1, 1 - (nextBeatTime - performance.now()) / BEAT_INTERVAL));
-        const barWidth = 300;
-        const barHeight = 10;
+        const barWidth = 400;
+        const barHeight = 15;
         const barX = (canvas.width - barWidth) / 2;
-        const barY = canvas.height - 40;
+        const barY = canvas.height - 50;
         
         ctx.fillStyle = 'rgba(255, 255, 255, 0.2)'; // 배경 게이지
         ctx.fillRect(barX, barY, barWidth, barHeight);
         
-        ctx.fillStyle = 'rgba(0, 255, 255, 0.8)'; // 차오르는 게이지
-        ctx.fillRect(barX, barY, barWidth * beatProgress, barHeight);
+        ctx.fillStyle = 'rgba(0, 255, 255, 0.8)'; // 차오르는 게이지 (Phase에 따라 0 부터 1까지 참)
+        ctx.fillRect(barX, barY, barWidth * beatPhase, barHeight);
         
-        // 정확도 판정선 (중앙 부분)
-        ctx.fillStyle = 'rgba(255, 255, 0, 0.8)';
-        ctx.fillRect(barX + barWidth - 2, barY - 5, 4, barHeight + 10);
-        ctx.fillRect(barX - 2, barY - 5, 4, barHeight + 10);
+        // 피드백용 목표 지점 (게이지 오른쪽 끝 부분)
+        ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+        ctx.fillRect(barX + barWidth - 4, barY - 5, 8, barHeight + 10);
         
         // 발걸음 (LMB/RMB) 시각적 표시 UI
         const stepPulse = (lastJudgeTime > 0 && timeSinceJudge < 300) ? Math.max(0, 1 - timeSinceJudge / 300) : 0;
@@ -448,9 +455,6 @@
         
         // 키보드 입력 핸들러 초기화
         initInputHandlers();
-        
-        // 시스템 첫 박자 시작 시간 설정
-        nextBeatTime = performance.now() + BEAT_INTERVAL;
 
         // 메인 게임 루프 시작
         requestAnimationFrame((timestamp) => {
