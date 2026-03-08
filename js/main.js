@@ -42,13 +42,14 @@
     let combo = 0;
     let lastJudge = "READY";
     let lastJudgeTime = 0;
-    let currentBeatHit = false;
+    let currentBeatHit = false;   // 이번 루프(0.0~1.0) 안에서 인정된 판정이 있었는지
+    let nextBeatHit = false;      // 루프 후반(1.0에 가까운)에 미리 친 판정 저장용
     let currentBeatPunished = false;
     
-    // 판정 범위 (Phase 기반 관용도)
-    const TOLERANCE_PHASE_PERFECT = 0.10;
-    const TOLERANCE_PHASE_GOOD = 0.25;
-    const TOLERANCE_PHASE_OK = 0.40;
+    // 판정 범위 (Phase 기반 관용도) - 범위를 좁히고 명확하게 설정
+    const TOLERANCE_PHASE_PERFECT = 0.05;
+    const TOLERANCE_PHASE_GOOD = 0.12;
+    const TOLERANCE_PHASE_OK = 0.20;
     
     // UI 표시용 (발걸음 피드백)
     let lastInputType = null;
@@ -163,8 +164,9 @@
         // 비트 갱신 처리 (1.0 도달 시 한 바퀴 순환)
         if (beatPhase >= 1.0) {
             beatPhase -= 1.0;
-            currentBeatHit = false;     // 새 비트에 대한 판정 초기화
-            currentBeatPunished = false; // 새 비트 놓침 페널티 초기화
+            currentBeatHit = nextBeatHit;    // 다음 비트를 미리 쳤다면 지금 비트로 가져옴
+            nextBeatHit = false;             // 다음 비트 상태 초기화
+            currentBeatPunished = false;     // 페널티 상태 초기화
         }
 
         const now = performance.now();
@@ -177,26 +179,38 @@
             const diffNext = 1.0 - beatPhase; // '조금 일찍' 눌렀을 때의 오차
             const diffPrev = beatPhase;       // '조금 늦게' 눌렀을 때의 오차
             const closestDiff = Math.min(diffNext, diffPrev);
+            const isEarly = diffNext < diffPrev; // 목표치(1.0)에 더 가까웠는가?
             
+            let hitSuccess = false;
+
             if (closestDiff <= TOLERANCE_PHASE_PERFECT) {
                 lastJudge = "PERFECT";
                 combo++;
                 velocity.z += 0.5; // 완벽 판정 시 가속 부스트
-                currentBeatHit = true;
+                hitSuccess = true;
             } else if (closestDiff <= TOLERANCE_PHASE_GOOD) {
                 lastJudge = "GOOD";
                 combo++;
                 velocity.z += 0.2; // 좋은 판정 시 약한 가속
-                currentBeatHit = true;
+                hitSuccess = true;
             } else if (closestDiff <= TOLERANCE_PHASE_OK) {
                 lastJudge = "OK";
                 combo++;
                 velocity.z += 0.05; // OK 판정 시 미세 가속
-                currentBeatHit = true;
+                hitSuccess = true;
             } else {
                 lastJudge = "MISS";
                 combo = 0;         // 콤보 초기화
                 velocity.z *= 0.6; // 패널티 (강한 감속 반영)
+            }
+            
+            // 유효한 타격(성공)이었다면, 어느 비트를 친 건지 기록
+            if (hitSuccess) {
+                if (isEarly) {
+                    nextBeatHit = true;
+                } else {
+                    currentBeatHit = true;
+                }
             }
             
             lastJudgeTime = now;
