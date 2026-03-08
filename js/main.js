@@ -13,10 +13,13 @@
         z: 0,
         yaw: 0, // 좌우 회전 각도 (라디안)
         pitch: 0, // 상하 회전 각도 (라디안)
-        fov: Math.PI / 3 // 시야각 (60도)
+        fov: Math.PI / 3, // 시야각 (60도)
+        roll: 0 // 화면 기울기 (좌우 틸트)
     };
 
+    let prevYaw = 0;
     let isPointerLocked = false;
+    const MOUSE_SENSITIVITY = 0.002;
     const EXPECTED_FPS_DELTATIME = 16.66;
     
     const velocity = { x: 0, z: 0 };
@@ -29,6 +32,10 @@
         s: false,
         d: false
     };
+    
+    // 리듬 입력을 위한 버퍼
+    const inputBuffer = [];
+    const MAX_BUFFER_SIZE = 10;
 
     // 트랙 설정
     const TRACK_WIDTH = 4;
@@ -53,6 +60,35 @@
             const key = e.key.toLowerCase();
             if (keys.hasOwnProperty(key)) {
                 keys[key] = false;
+            }
+        });
+
+        // 우클릭 메뉴 방지
+        window.addEventListener('contextmenu', (e) => {
+            if (isPointerLocked) e.preventDefault();
+        });
+
+        // 마우스 클릭 (LMB, RMB) 리듬 입력 처리
+        window.addEventListener('mousedown', (e) => {
+            if (!isPointerLocked) return;
+
+            // 0: 좌클릭(LMB), 2: 우클릭(RMB)
+            const type = e.button === 0 ? 'LMB' : (e.button === 2 ? 'RMB' : null);
+            if (type) {
+                // 입력 버퍼에 저장
+                inputBuffer.push({
+                    type: type,
+                    timestamp: performance.now(),
+                    processed: false
+                });
+
+                // 버퍼 크기 유지
+                if (inputBuffer.length > MAX_BUFFER_SIZE) {
+                    inputBuffer.shift();
+                }
+                
+                // 임시 피드백 로그
+                console.log(`[Input] ${type} stored in buffer`);
             }
         });
     }
@@ -99,6 +135,16 @@
         // 위치 업데이트
         camera.x += velocity.x * timeScale;
         camera.z += velocity.z * timeScale;
+        
+        // --- 가짜 3D 틸트(Roll) 연출 처리 ---
+        // A,D 이동 및 마우스 좌우 회전 속도에 따라 카메라를 기울입니다.
+        const yawDelta = camera.yaw - prevYaw;
+        const targetRoll = (inputX * -0.05) + (yawDelta * -2.5);
+        
+        // 부드럽게 Roll 값 보간(Lerp)
+        camera.roll += (targetRoll - camera.roll) * 0.1 * timeScale;
+        
+        prevYaw = camera.yaw;
     }
 
     /**
@@ -129,14 +175,20 @@
         // 카메라 렌즈 뒤에 있는 점은 렌더링 무시
         if (finalZ <= 0.1) return null;
 
-        // 4. 원근 투영 변환 (Perspective Projection)
+        // 4. Z축(Roll) 회전 적용 (좌우 틸트 연출)
+        const cosRoll = Math.cos(camera.roll);
+        const sinRoll = Math.sin(camera.roll);
+        let finalX = rotX * cosRoll + finalY * sinRoll;
+        let finalY_afterRoll = -rotX * sinRoll + finalY * cosRoll;
+
+        // 5. 원근 투영 변환 (Perspective Projection)
         const fovMult = 1 / Math.tan(camera.fov / 2);
         const scale = fovMult / finalZ;
 
-        // 5. 2D 화면 좌표 계산
-        const screenX = (rotX * scale * canvas.height) + (canvas.width / 2);
+        // 6. 2D 화면 좌표 계산
+        const screenX = (finalX * scale * canvas.height) + (canvas.width / 2);
         // Canvas는 Y축이 아래로 증가하므로 -를 붙여줌
-        const screenY = (-finalY * scale * canvas.height) + (canvas.height / 2);
+        const screenY = (-finalY_afterRoll * scale * canvas.height) + (canvas.height / 2);
 
         return {
             screenX: screenX,
