@@ -48,6 +48,10 @@
     
     const TOLERANCE_PERFECT = 80;  // +/- 80ms 이내
     const TOLERANCE_GOOD = 150;    // +/- 150ms 이내
+    const TOLERANCE_OK = 250;      // +/- 250ms 이내
+    
+    // UI 표시용 (발걸음 피드백)
+    let lastInputType = null;
 
     // 트랙 설정
     const TRACK_WIDTH = 4;
@@ -169,6 +173,10 @@
                 lastJudge = "GOOD";
                 combo++;
                 velocity.z += 0.2; // 좋은 판정 시 약한 가속
+            } else if (closestDiff <= TOLERANCE_OK) {
+                lastJudge = "OK";
+                combo++;
+                velocity.z += 0.05; // OK 판정 시 미세 가속
             } else {
                 lastJudge = "MISS";
                 combo = 0;         // 콤보 초기화
@@ -176,6 +184,7 @@
             }
             
             lastJudgeTime = now;
+            lastInputType = input.type;
         }
 
         // 비트 갱신 처리
@@ -346,9 +355,14 @@
         if (timeSinceJudge < 1000 && lastJudge !== "READY") {
             const alpha = Math.max(0, 1 - timeSinceJudge / 1000);
             
-            if (lastJudge === "PERFECT") ctx.fillStyle = `rgba(0, 255, 255, ${alpha})`;
-            else if (lastJudge === "GOOD") ctx.fillStyle = `rgba(0, 255, 0, ${alpha})`;
-            else ctx.fillStyle = `rgba(255, 0, 0, ${alpha})`;
+            const judgeColors = {
+                "PERFECT": `rgba(0, 255, 255, ${alpha})`,
+                "GOOD": `rgba(0, 255, 0, ${alpha})`,
+                "OK": `rgba(255, 165, 0, ${alpha})`, // 주황색
+                "MISS": `rgba(255, 0, 0, ${alpha})`
+            };
+            
+            ctx.fillStyle = judgeColors[lastJudge] || `rgba(255, 255, 255, ${alpha})`;
             
             ctx.font = 'bold 36px "Courier New", monospace';
             ctx.textAlign = 'center';
@@ -372,6 +386,25 @@
         ctx.fillStyle = 'rgba(255, 255, 0, 0.8)';
         ctx.fillRect(barX + barWidth - 2, barY - 5, 4, barHeight + 10);
         ctx.fillRect(barX - 2, barY - 5, 4, barHeight + 10);
+        
+        // 발걸음 (LMB/RMB) 시각적 표시 UI
+        const stepPulse = (lastJudgeTime > 0 && timeSinceJudge < 300) ? Math.max(0, 1 - timeSinceJudge / 300) : 0;
+        
+        // 왼발 (LMB)
+        ctx.fillStyle = (lastInputType === 'LMB' && stepPulse > 0) ? `rgba(0, 255, 255, ${0.5 + stepPulse * 0.5})` : 'rgba(255, 255, 255, 0.2)';
+        ctx.fillRect(barX - 80, barY - 20, 60, 40);
+        ctx.fillStyle = '#111';
+        ctx.font = 'bold 14px "Courier New", monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText("LMB", barX - 50, barY - 2);
+        ctx.fillText("LEFT", barX - 50, barY + 14);
+
+        // 오른발 (RMB)
+        ctx.fillStyle = (lastInputType === 'RMB' && stepPulse > 0) ? `rgba(0, 255, 255, ${0.5 + stepPulse * 0.5})` : 'rgba(255, 255, 255, 0.2)';
+        ctx.fillRect(barX + barWidth + 20, barY - 20, 60, 40);
+        ctx.fillStyle = '#111';
+        ctx.fillText("RMB", barX + barWidth + 50, barY - 2);
+        ctx.fillText("RIGHT", barX + barWidth + 50, barY + 14);
     }
 
     function gameLoop(timestamp) {
